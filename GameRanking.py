@@ -1,15 +1,119 @@
 import pandas as pd
 from nba_api.stats.endpoints import leaguegamefinder, playbyplay, boxscoretraditionalv2
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import dash
 from dash import dcc, html, dash_table
 from dash.dependencies import Input, Output
 import plotly.express as px
+import os
+import json
 
 # -----------------------------
 # Configuration and weights for game scoring
 # -----------------------------
+
+# Cache variables for data
+last_data_fetch_time = None
+cached_results_df = None
+DATA_FETCH_INTERVAL = 300  # 5 minutes in seconds
+
+# Force a refresh by removing existing cache files at startup
+def clear_cache():
+    try:
+        if os.path.exists('data_cache.csv'):
+            os.remove('data_cache.csv')
+            print("Removed data_cache.csv")
+        if os.path.exists('data_cache.json'):
+            os.remove('data_cache.json')
+            print("Removed data_cache.json")
+    except Exception as e:
+        print(f"Error clearing cache: {e}")
+
+# Clear cache at startup to force a fresh data fetch
+clear_cache()
+
+# Function to check if we should fetch new data
+def should_fetch_data():
+    global last_data_fetch_time
+    
+    # If we've never fetched data or the cache file doesn't exist, we should fetch
+    if last_data_fetch_time is None:
+        # Check if we have a cache file with a timestamp
+        if os.path.exists('data_cache.json'):
+            try:
+                with open('data_cache.json', 'r') as f:
+                    cache_data = json.load(f)
+                    cache_timestamp = cache_data.get('timestamp', '2000-01-01T00:00:00')
+                    last_data_fetch_time = datetime.fromisoformat(cache_timestamp)
+                    
+                    # Validate that the timestamp is not in the future
+                    if last_data_fetch_time > datetime.now():
+                        print(f"Cache timestamp is in the future ({last_data_fetch_time}), forcing refresh")
+                        return True
+                        
+                    print(f"Last data fetch time: {last_data_fetch_time}")
+            except Exception as e:
+                print(f"Error reading cache timestamp: {e}")
+                # If there's an error reading the cache, fetch new data
+                return True
+        else:
+            print("No cache file found, fetching new data")
+            return True
+    
+    # Check if enough time has passed since the last fetch
+    current_time = datetime.now()
+    time_since_last_fetch = current_time - last_data_fetch_time
+    
+    should_fetch = time_since_last_fetch.total_seconds() >= DATA_FETCH_INTERVAL
+    if should_fetch:
+        print(f"Cache expired ({time_since_last_fetch.total_seconds()} seconds old), fetching new data")
+    else:
+        print(f"Using cache ({time_since_last_fetch.total_seconds()} seconds old)")
+    
+    return should_fetch
+
+# Function to save data to cache
+def save_data_to_cache(df):
+    global last_data_fetch_time
+    
+    try:
+        # Create directory if it doesn't exist
+        cache_dir = os.path.dirname('data_cache.csv')
+        if cache_dir and not os.path.exists(cache_dir):
+            os.makedirs(cache_dir)
+        
+        last_data_fetch_time = datetime.now()
+        
+        # Save the dataframe to a CSV file
+        df.to_csv('data_cache.csv', index=False)
+        print(f"Saved data to cache at {last_data_fetch_time}")
+        
+        # Save the timestamp to a JSON file
+        with open('data_cache.json', 'w') as f:
+            json.dump({
+                'timestamp': last_data_fetch_time.isoformat()
+            }, f)
+        
+        return True
+    except Exception as e:
+        print(f"Error saving data to cache: {e}")
+        return False
+
+# Function to load data from cache
+def load_data_from_cache():
+    try:
+        if os.path.exists('data_cache.csv'):
+            df = pd.read_csv('data_cache.csv')
+            print(f"Loaded {len(df)} rows from cache")
+            return df
+        else:
+            print("Cache file not found")
+            return None
+    except Exception as e:
+        print(f"Error loading data from cache: {e}")
+        return None
+
 weight_config = {
     'period_weights': {1: 0.33, 2: 0.33, 3: 0.34, 4: 0}, 
     'extra_period_weight': 0.05,      # Weight for overtime periods
@@ -29,31 +133,43 @@ adjusted_period_weights = {k: v * weight_config['max_total_score'] for k, v in w
 
 def calculate_period_score(period_df, column_name, weight):
     """
-    Calculate the score for a specific period based on score margin.
+    Calculate the score for a period based on score margin.
     
     Args:
         period_df: DataFrame containing play-by-play data for the period
-        column_name: Column name for score margin
-        weight: Weight for this period in the total score
+        column_name: Column name to use for score calculation
+        weight: Weight to apply to the score
         
     Returns:
-        Tuple of (average_periodscore, period_score)
+        float: The calculated period score
     """
-    # Replace 'TIE' with 0
-    period_df.loc[period_df[column_name] == 'TIE', column_name] = 0
-    period_df[column_name] = period_df[column_name].fillna(0).astype(float)
-    period_df['PERIODSCORE'] = period_df[column_name].abs()
-    filtered_df = period_df.dropna(subset=['SCORE'])
-    average_periodscore = filtered_df['PERIODSCORE'].mean()
-    
-    # Calculate period score - closer games (lower average_periodscore) get higher scores
-    if average_periodscore <= 7:
-        period_score = weight * 100
-    elif average_periodscore > 20:
-        period_score = 0
-    else:
-        period_score = weight * 100 * (20 - average_periodscore) / 13
-    return average_periodscore, period_score
+    try:
+        # Filter relevant columns and convert to numeric
+        period_df = period_df[['PERIOD', 'EVENTMSGTYPE', 'SCORE', 'SCOREMARGIN', 'PCTIMESTRING']]
+        period_df['SCOREMARGIN'] = pd.to_numeric(period_df['SCOREMARGIN'], errors='coerce')
+        
+        # Calculate scores for each period
+        period_scores = {}
+        total_period_score = 0
+        
+        for period in range(1, period_df['PERIOD'].max() + 1):
+            period_data = period_df[period_df['PERIOD'] == period]
+            if not period_data.empty:
+                # Calculate average score margin for the period
+                margins = period_data['SCOREMARGIN'].dropna()
+                if not margins.empty:
+                    average_margin = margins.abs().mean()
+                    
+                    # Closer games (lower average_margin) get higher scores
+                    # Use an inverse relationship with a cap
+                    period_score = min(100, 100 / (average_margin + 1)) * weight_config['period_weights'].get(period, 0.25)
+                    period_scores[period] = period_score
+                    total_period_score += period_score
+        
+        return total_period_score
+    except Exception as e:
+        print(f"Error calculating period score: {e}")
+        return 0
 
 def calculate_lead_changes_score(df, weight):
     """
@@ -61,145 +177,142 @@ def calculate_lead_changes_score(df, weight):
     
     Args:
         df: DataFrame containing play-by-play data
-        weight: Weight for lead changes in the total score
+        weight: Weight to apply to the score
         
     Returns:
-        Tuple of (lead_changes, lead_changes_score)
+        float: The calculated lead changes score
     """
-    lead_changes = 0
-    previous_margin = None
-    for margin in df['SCOREMARGIN']:
-        if margin == 'TIE' or pd.isna(margin):
-            continue
-        try:
-            margin = float(margin)
-        except ValueError:
-            continue
-        if previous_margin is not None and ((previous_margin < 0 and margin > 0) or (previous_margin > 0 and margin < 0)):
-            lead_changes += 1
-        previous_margin = margin
-    
-    # More lead changes result in higher scores
-    if lead_changes >= 12:
-        lead_changes_score = weight * 100
-    elif lead_changes <= 5:
-        lead_changes_score = 0
-    else:
-        lead_changes_score = weight * 100 * (lead_changes - 5) / 7
-    return lead_changes, lead_changes_score
+    try:
+        # Convert SCOREMARGIN to numeric, replacing 'TIE' with 0
+        df = df.copy()
+        df.loc[df['SCOREMARGIN'] == 'TIE', 'SCOREMARGIN'] = '0'
+        df['SCOREMARGIN'] = pd.to_numeric(df['SCOREMARGIN'], errors='coerce')
+        
+        # Count lead changes
+        lead_changes = 0
+        prev_lead = None
+        
+        for _, row in df.iterrows():
+            if pd.notna(row['SCOREMARGIN']):
+                current_lead = 'HOME' if row['SCOREMARGIN'] > 0 else ('AWAY' if row['SCOREMARGIN'] < 0 else 'TIE')
+                
+                if prev_lead is not None and prev_lead != current_lead and current_lead != 'TIE' and prev_lead != 'TIE':
+                    lead_changes += 1
+                
+                prev_lead = current_lead
+        
+        # Calculate score based on lead changes
+        if lead_changes >= 15:
+            lead_changes_score = weight * 100
+        elif lead_changes <= 5:
+            lead_changes_score = 0
+        else:
+            lead_changes_score = weight * 100 * (lead_changes - 5) / 10
+            
+        return lead_changes_score
+    except Exception as e:
+        print(f"Error calculating lead changes score: {e}")
+        return 0
 
 def calculate_buzzer_beater_score(df, weight):
     """
-    Calculate a score based on buzzer beaters (shots made in the last seconds of a period).
+    Calculate score based on buzzer beaters in the game.
     
     Args:
-        df: Play-by-play DataFrame
-        weight: Weight for buzzer beater score
+        df: DataFrame containing play-by-play data
+        weight: Weight to apply to the score
         
     Returns:
-        tuple: (Boolean indicating if there was a buzzer beater, calculated score)
+        float: The calculated buzzer beater score
     """
-    # Check if DataFrame is empty
-    if df.empty:
-        return False, 0
-        
-    # Initialize variables
-    buzzer_beater = False
-    buzzer_beater_score = 0
-    
-    # Check if we have SCOREMARGIN column
-    if 'SCOREMARGIN' not in df.columns:
-        return False, 0
-    
-    # Get the last margin
     try:
-        last_margin = df['SCOREMARGIN'].iloc[-1]
+        buzzer_beater_score = 0
         
-        # Convert 'TIE' to 0
-        if last_margin == 'TIE':
-            last_margin = 0
-        else:
-            last_margin = int(last_margin)
-        
-        # Check for buzzer beaters in the last 24 seconds of any period
-        for period in df['PERIOD'].unique():
-            period_df = df[df['PERIOD'] == period]
+        # Filter for scoring events (EVENTMSGTYPE 1 or 2) in the last 24 seconds of each period
+        for period in range(1, df['PERIOD'].max() + 1):
+            period_df = df[df['PERIOD'] == period].copy()
             
-            # Skip if period_df is empty
             if period_df.empty:
                 continue
                 
-            last_plays = period_df[period_df['PCTIMESTRING'].apply(
-                lambda x: convert_pctimestring_to_seconds(x) <= 24 if isinstance(x, str) else False
-            )]
+            # Convert PCTIMESTRING to seconds
+            period_df['SECONDS'] = period_df['PCTIMESTRING'].apply(convert_pctimestring_to_seconds)
             
-            # Skip if last_plays is empty
-            if last_plays.empty:
-                continue
-                
-            for _, play in last_plays.iterrows():
-                if 'HOMEDESCRIPTION' in play and isinstance(play['HOMEDESCRIPTION'], str) and 'SHOT' in play['HOMEDESCRIPTION'] and play['HOMEDESCRIPTION'].endswith('MADE'):
-                    buzzer_beater = True
-                    break
-                if 'AWAYDESCRIPTION' in play and isinstance(play['AWAYDESCRIPTION'], str) and 'SHOT' in play['AWAYDESCRIPTION'] and play['AWAYDESCRIPTION'].endswith('MADE'):
-                    buzzer_beater = True
-                    break
+            # Filter for scoring events in the last 24 seconds
+            last_seconds_df = period_df[(period_df['SECONDS'] <= 24) & 
+                                       (period_df['EVENTMSGTYPE'].isin([1, 2]))]
+            
+            if not last_seconds_df.empty:
+                # Award points based on how close to the buzzer
+                for _, row in last_seconds_df.iterrows():
+                    seconds = row['SECONDS']
+                    if seconds <= 5:
+                        # Last 5 seconds gets full weight
+                        buzzer_beater_score += weight * 100
+                    elif seconds <= 10:
+                        # 6-10 seconds gets 75% weight
+                        buzzer_beater_score += weight * 75
+                    elif seconds <= 24:
+                        # 11-24 seconds gets 50% weight
+                        buzzer_beater_score += weight * 50
         
-        # Calculate score based on buzzer beater and final margin
-        if buzzer_beater:
-            # Higher score for closer games
-            if abs(last_margin) <= 3:
-                buzzer_beater_score = weight
-            elif abs(last_margin) <= 5:
-                buzzer_beater_score = weight * 0.8
-            else:
-                buzzer_beater_score = weight * 0.5
+        # Cap the score at 100 * weight
+        buzzer_beater_score = min(buzzer_beater_score, weight * 100)
+            
+        return buzzer_beater_score
     except Exception as e:
         print(f"Error calculating buzzer beater score: {e}")
-        return False, 0
-        
-    return buzzer_beater, buzzer_beater_score
+        return 0
 
 def get_fg_fg3_pct_score(recent_games, game_id, weight):
     """
-    Calculate score based on field goal and 3-point field goal percentages.
+    Calculate score based on field goal percentages.
     
     Args:
         recent_games: DataFrame containing recent games data
         game_id: ID of the current game
-        weight: Weight for FG3_PCT in the total score
+        weight: Weight to apply to the score
         
     Returns:
-        Tuple of (max_fg_pct_score, max_fg3_pct_score, combined_score)
+        float: The calculated field goal percentage score
     """
-    fg_pct_scores = []
-    fg3_pct_scores = []
-    for _, row in recent_games[recent_games['GAME_ID']==game_id].iterrows():
-        fg_pct = row['FG_PCT']
-        fg3_pct = row['FG3_PCT']
+    try:
+        # Get box score data for the game
+        box_score = boxscoretraditionalv2.BoxScoreTraditionalV2(game_id=game_id).get_data_frames()[0]
         
+        if box_score.empty:
+            return 0
+            
+        # Calculate team field goal percentages
+        team_stats = box_score.groupby('TEAM_ID').agg({
+            'FGM': 'sum',
+            'FGA': 'sum',
+            'FG3M': 'sum',
+            'FG3A': 'sum'
+        }).reset_index()
+        
+        # Calculate percentages
+        team_stats['FG_PCT'] = team_stats['FGM'] / team_stats['FGA']
+        team_stats['FG3_PCT'] = team_stats['FG3M'] / team_stats['FG3A']
+        
+        # Replace NaN with 0
+        team_stats.fillna(0, inplace=True)
+        
+        # Get maximum percentages
+        max_fg_pct = team_stats['FG_PCT'].max()
+        max_fg3_pct = team_stats['FG3_PCT'].max()
+        
+        # Calculate score based on percentages
         # Higher FG percentages result in higher scores
-        if fg_pct >= 0.5:
-            fg_pct_score = weight * 100
-        elif fg_pct <= 0.4:
-            fg_pct_score = 0
-        else:
-            fg_pct_score = weight * 100 * (fg_pct - 0.4) / 0.1
-            
-        # Higher 3PT percentages result in higher scores
-        if fg3_pct >= 0.35:
-            fg3_pct_score = weight * 100
-        elif fg3_pct <= 0.25:
-            fg3_pct_score = 0
-        else:
-            fg3_pct_score = weight * 100 * (fg3_pct - 0.25) / 0.1
-            
-        fg_pct_scores.append(fg_pct_score)
-        fg3_pct_scores.append(fg3_pct_score)
+        fg_score = min(100, max_fg_pct * 200) * 0.3  # 30% weight to FG%
+        fg3_score = min(100, max_fg3_pct * 250) * 0.7  # 70% weight to 3PT%
         
-    # Take the maximum of FG and 3PT scores
-    combined_score = max(max(fg_pct_scores), max(fg3_pct_scores))
-    return max(fg_pct_scores), max(fg3_pct_scores), combined_score
+        combined_score = (fg_score + fg3_score) * weight
+        
+        return combined_score
+    except Exception as e:
+        print(f"Error calculating FG/FG3 score: {e}")
+        return 0
 
 def convert_pctimestring_to_seconds(pctimestring):
     """
@@ -216,47 +329,61 @@ def convert_pctimestring_to_seconds(pctimestring):
 
 def calculate_margin_and_star_performance_score(pbp_df, game_id, weight_margin, weight_star):
     """
-    Calculate scores based on game margin and star player performances.
+    Calculate scores for margin and star performance.
     
     Args:
         pbp_df: DataFrame containing play-by-play data
         game_id: ID of the current game
-        weight_margin: Weight for margin in the total score
-        weight_star: Weight for star performance in the total score
+        weight_margin: Weight to apply to the margin score
+        weight_star: Weight to apply to the star performance score
         
     Returns:
-        Tuple of (average_margin, margin_score, max_points, star_performance_score)
+        tuple: (margin_score, star_performance_score, average_margin)
     """
-    # Get box score data for the game
-    boxscore = boxscoretraditionalv2.BoxScoreTraditionalV2(game_id=game_id)
-    boxscore_df = boxscore.get_data_frames()[0]
-    
-    # Convert period clock time to seconds
-    pbp_df['PCTIMESECONDS'] = pbp_df['PCTIMESTRING'].apply(convert_pctimestring_to_seconds)
-    
-    # Calculate average margin in the last 5 minutes of the game
-    max_period = pbp_df['PERIOD'].max()
-    filtered_pbp_df = pbp_df[(pbp_df['PERIOD'] == max_period) & (pbp_df['PCTIMESECONDS'] >= 300)]
-    average_margin = filtered_pbp_df['SCOREMARGIN'].mean()
-    
-    # Closer games (lower average_margin) get higher scores
-    if average_margin >= 15:
-        margin_score = 0
-    elif average_margin <= 5:
-        margin_score = weight_margin * 100
-    else:
-        margin_score = weight_margin * 100 * (15 - average_margin) / 10
+    try:
+        # Calculate average margin
+        pbp_df = pbp_df.copy()
+        pbp_df.loc[pbp_df['SCOREMARGIN'] == 'TIE', 'SCOREMARGIN'] = '0'
+        pbp_df['SCOREMARGIN'] = pd.to_numeric(pbp_df['SCOREMARGIN'], errors='coerce')
         
-    # Higher max points by a player results in higher star performance score
-    max_points = boxscore_df['PTS'].max()
-    if max_points >= 35:
-        star_performance_score = weight_star * 100
-    elif max_points <= 20:
-        star_performance_score = 0
-    else:
-        star_performance_score = weight_star * 100 * (max_points - 20) / 15
+        # Filter out rows with NaN SCOREMARGIN
+        filtered_df = pbp_df.dropna(subset=['SCOREMARGIN'])
         
-    return average_margin, margin_score, max_points, star_performance_score
+        if filtered_df.empty:
+            return 0, 0, 0
+            
+        # Calculate average margin
+        average_margin = filtered_df['SCOREMARGIN'].abs().mean()
+        
+        # Calculate margin score - closer games get higher scores
+        if average_margin <= 5:
+            margin_score = weight_margin * 100
+        elif average_margin >= 15:
+            margin_score = 0
+        else:
+            margin_score = weight_margin * 100 * (15 - average_margin) / 10
+            
+        # Get box score data for star performance calculation
+        box_score = boxscoretraditionalv2.BoxScoreTraditionalV2(game_id=game_id).get_data_frames()[0]
+        
+        if box_score.empty:
+            return margin_score, 0, average_margin
+            
+        # Find max points scored by a player
+        max_points = box_score['PTS'].max() if 'PTS' in box_score.columns else 0
+        
+        # Calculate star performance score
+        if max_points >= 40:
+            star_performance_score = weight_star * 100
+        elif max_points <= 25:
+            star_performance_score = 0
+        else:
+            star_performance_score = weight_star * 100 * (max_points - 25) / 15
+            
+        return margin_score, star_performance_score, average_margin
+    except Exception as e:
+        print(f"Error calculating margin and star performance: {e}")
+        return 0, 0, 0
 
 def get_grade(total_score):
     """
@@ -285,140 +412,270 @@ def get_grade(total_score):
 
 def get_recent_games():
     """
-    Fetch recent NBA games using the NBA API.
+    Fetch recent NBA games from the API.
     
     Returns:
-        DataFrame containing recent games data
+        DataFrame: A DataFrame containing recent NBA games, or None if an error occurs.
     """
-    gamefinder = leaguegamefinder.LeagueGameFinder(league_id_nullable='00')
-    games = gamefinder.get_data_frames()[0]
-    games = games.sort_values(by=['GAME_DATE', 'GAME_ID'], ascending=[False, False])
-    games['GAME_DATE'] = pd.to_datetime(games['GAME_DATE'])
-    recent_games = games.head(20)  # Get the 10 most recent games
-    return recent_games
-
-# -----------------------------
-# Fetch games and ensure we have data
-# -----------------------------
-recent_games = get_recent_games()
-
-# Try to filter for away games (games with '@' in matchup) and use all games if none found
-filtered_recent_games = recent_games[recent_games['MATCHUP'].str.contains('@')]
-unique_recent_games = filtered_recent_games.drop_duplicates(subset=['GAME_ID'])
-if unique_recent_games.empty:
-    print("No away matches found, using all recent games instead.")
-    unique_recent_games = recent_games.drop_duplicates(subset=['GAME_ID'])
-
-results = []
-
-# -----------------------------
-# Loop through games and calculate scores
-# -----------------------------
-for _, game in unique_recent_games.iterrows():
-    game_id = game['GAME_ID']
-    matchup = game['MATCHUP']
-    game_date = game['GAME_DATE'].strftime('%Y-%m-%d')
     try:
-        # Get play-by-play data for the game
-        pbp = playbyplay.PlayByPlay(game_id=game_id)
-        pbp_df = pbp.get_data_frames()[0]
+        print("Fetching games from NBA API...")
+        
+        # Add a delay to avoid API rate limits
+        time.sleep(1)
+        
+        # Get recent games - try with a more recent date range first
+        try:
+            # Try to get games from the last 30 days
+            thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+            gamefinder = leaguegamefinder.LeagueGameFinder(
+                date_from_nullable=thirty_days_ago,
+                league_id_nullable='00'
+            )
+            games = gamefinder.get_data_frames()[0]
+            
+            if games.empty or len(games) < 5:  # If we get too few games, try a wider date range
+                print(f"Found only {len(games) if not games.empty else 0} games in the last 30 days, trying a wider date range")
+                raise Exception("Too few games found")
+                
+        except Exception as e:
+            print(f"Error with initial date range: {e}, trying wider date range")
+            # If that fails, try with a wider date range
+            time.sleep(2)  # Add a delay before the second API call
+            gamefinder = leaguegamefinder.LeagueGameFinder(
+                date_from_nullable='2023-10-01',
+                league_id_nullable='00'
+            )
+            games = gamefinder.get_data_frames()[0]
+        
+        if games.empty:
+            print("No games found in API response")
+            return None
+            
+        print(f"Found {len(games)} games in API response")
+        
+        # Sort games by date (most recent first)
+        games['GAME_DATE'] = pd.to_datetime(games['GAME_DATE'])
+        games = games.sort_values('GAME_DATE', ascending=False)
+        
+        # Limit to the 20 most recent games to avoid processing too many
+        recent_games = games.head(20)
+        print(f"Limited to {len(recent_games)} most recent games")
+        
+        # Try to filter for away games (games with '@' in matchup) and use all games if none found
+        filtered_recent_games = recent_games[recent_games['MATCHUP'].str.contains('@')]
+        unique_recent_games = filtered_recent_games.drop_duplicates(subset=['GAME_ID'])
+        
+        if unique_recent_games.empty:
+            print("No away matches found, using all recent games instead.")
+            unique_recent_games = recent_games.drop_duplicates(subset=['GAME_ID'])
+        
+        print(f"Final dataset contains {len(unique_recent_games)} unique games")
+        
+        # Format the date column
+        unique_recent_games['GAME_DATE'] = pd.to_datetime(unique_recent_games['GAME_DATE']).dt.strftime('%Y-%m-%d')
+        
+        return unique_recent_games
     except Exception as e:
-        print(f"Error fetching play-by-play for game_id {game_id}: {e}")
-        continue
+        print(f"Error fetching recent games: {e}")
+        # Print more detailed error information
+        import traceback
+        traceback.print_exc()
+        return None
 
-    # Filter relevant columns from play-by-play data
-    pbp_df = pbp_df[['PERIOD', 'EVENTMSGTYPE', 'EVENTMSGACTIONTYPE', 'EVENTNUM', 'SCORE', 'SCOREMARGIN', 'PCTIMESTRING']]
-    pbp_df['SCOREMARGIN'] = pd.to_numeric(pbp_df['SCOREMARGIN'], errors='coerce')
-
-    # Initialize score components
-    total_scores = {column: 0 for column in ['Period Scores', 'Extra Periods', 'Lead Changes', 'Buzzer Beater', 'FG3_PCT', 'Star Performance', 'Margin']}
-    period_scores = {period: 0 for period in adjusted_period_weights}
-
-    # Calculate scores for each period
-    for period, weight in adjusted_period_weights.items():
-        period_df = pbp_df[pbp_df['PERIOD'] == period].copy()
-        if not period_df.empty:
-            average_periodscore, period_score = calculate_period_score(period_df, 'SCOREMARGIN', weight)
-            period_scores[period] = period_score
-    period_scores_total = sum(period_scores.values())
-    total_scores['Period Scores'] = period_scores_total
-
-    # Check for overtime periods
-    extra_periods = pbp_df[pbp_df['PERIOD'] > 4]
-    if not extra_periods.empty:
-        extra_score = weight_config['extra_period_weight'] * 100
-        total_scores['Extra Periods'] = extra_score
-
-    # Calculate lead changes score
-    lead_changes, lead_changes_score = calculate_lead_changes_score(pbp_df, weight_config['lead_change_weight'])
-    total_scores['Lead Changes'] = lead_changes_score
-
-    # Calculate buzzer beater score
-    buzzer_beater, buzzer_beater_score = calculate_buzzer_beater_score(pbp_df, weight_config['buzzer_beater_weight'])
-    total_scores['Buzzer Beater'] = buzzer_beater_score
-
-    # Calculate field goal percentage score
-    max_fg_pct, max_fg3_pct, fg_combined_score = get_fg_fg3_pct_score(recent_games, game_id, weight_config['fg3_pct_weight'])
-    total_scores['FG3_PCT'] = fg_combined_score
-
-    # Calculate margin and star performance scores
+# -----------------------------
+# Main data processing
+# -----------------------------
+def process_data():
+    global cached_results_df
+    
     try:
-        average_margin, margin_score, max_points, star_performance_score = calculate_margin_and_star_performance_score(pbp_df, game_id, weight_config['margin_weight'], weight_config['star_performance_weight'])
+        # Check if we should fetch new data or use cached data
+        if should_fetch_data():
+            print("Fetching fresh data...")
+            recent_games = get_recent_games()
+            
+            # Process the data
+            if recent_games is None or len(recent_games) == 0:
+                print("No analyzed results found, creating dummy data.")
+                # Create dummy data for testing
+                results_df = create_dummy_data()
+            else:
+                # Process each game
+                results = []
+                successful_games = 0
+                
+                # Limit to processing at most 10 games to avoid timeouts
+                games_to_process = min(10, len(recent_games))
+                print(f"Will process up to {games_to_process} games")
+                
+                for i, game in recent_games.head(games_to_process).iterrows():
+                    try:
+                        game_id = game['GAME_ID']
+                        game_date = game['GAME_DATE']
+                        matchup = game['MATCHUP']
+                        
+                        print(f"Processing game {i+1}/{games_to_process}: {matchup} on {game_date}")
+                        
+                        # Get play-by-play data with retry logic
+                        pbp_df = None
+                        max_retries = 3
+                        for retry in range(max_retries):
+                            try:
+                                # Add a delay to avoid API rate limits
+                                time.sleep(1)
+                                pbp_df = playbyplay.PlayByPlay(game_id=game_id).get_data_frames()[0]
+                                break
+                            except Exception as e:
+                                print(f"Error fetching play-by-play data for game {game_id} (attempt {retry+1}/{max_retries}): {e}")
+                                if retry == max_retries - 1:
+                                    raise
+                                time.sleep(2)  # Wait before retrying
+                        
+                        if pbp_df is None or pbp_df.empty:
+                            print(f"No play-by-play data available for game {game_id}")
+                            continue
+                        
+                        # Calculate scores for different metrics
+                        period_score = calculate_period_score(pbp_df, 'SCORE', weight_config['period_score_weight'])
+                        lead_changes_score = calculate_lead_changes_score(pbp_df, weight_config['lead_changes_weight'])
+                        buzzer_beater_score = calculate_buzzer_beater_score(pbp_df, weight_config['buzzer_beater_weight'])
+                        
+                        # Get FG3 percentage score with retry logic
+                        fg3_pct_score = 0
+                        for retry in range(max_retries):
+                            try:
+                                # Add a delay to avoid API rate limits
+                                time.sleep(1)
+                                fg3_pct_score = get_fg_fg3_pct_score(recent_games, game_id, weight_config['fg3_pct_weight'])
+                                break
+                            except Exception as e:
+                                print(f"Error calculating FG3 score for game {game_id} (attempt {retry+1}/{max_retries}): {e}")
+                                if retry == max_retries - 1:
+                                    # Use a default value if all retries fail
+                                    fg3_pct_score = 0
+                                time.sleep(2)  # Wait before retrying
+                        
+                        # Calculate margin and star performance scores with retry logic
+                        margin_score, star_performance_score, avg_margin = 0, 0, 0
+                        for retry in range(max_retries):
+                            try:
+                                # Add a delay to avoid API rate limits
+                                time.sleep(1)
+                                margin_score, star_performance_score, avg_margin = calculate_margin_and_star_performance_score(
+                                    pbp_df, game_id, weight_config['margin_weight'], weight_config['star_performance_weight']
+                                )
+                                break
+                            except Exception as e:
+                                print(f"Error calculating margin/star performance for game {game_id} (attempt {retry+1}/{max_retries}): {e}")
+                                if retry == max_retries - 1:
+                                    # Use default values if all retries fail
+                                    margin_score, star_performance_score, avg_margin = 0, 0, 0
+                                time.sleep(2)  # Wait before retrying
+                        
+                        # Calculate extra periods score
+                        max_period = pbp_df['PERIOD'].max()
+                        extra_periods_score = (max_period - 4) * weight_config['extra_periods_weight'] if max_period > 4 else 0
+                        
+                        # Calculate total score
+                        total_score = (
+                            period_score + 
+                            lead_changes_score + 
+                            buzzer_beater_score + 
+                            fg3_pct_score + 
+                            margin_score + 
+                            star_performance_score + 
+                            extra_periods_score
+                        )
+                        
+                        # Get grade based on total score
+                        grade = get_grade(total_score)
+                        
+                        # Add to results
+                        results.append({
+                            'Game Date': game_date,
+                            'Teams': matchup,
+                            'Total Score': round(total_score, 1),
+                            'Period Scores': round(period_score, 1),
+                            'Extra Periods': round(extra_periods_score, 1),
+                            'Lead Changes': round(lead_changes_score, 1),
+                            'Buzzer Beater': round(buzzer_beater_score, 1),
+                            'FG3_PCT': round(fg3_pct_score, 1),
+                            'Star Performance': round(star_performance_score, 1),
+                            'Margin': round(margin_score, 1),
+                            'Average Margin': round(avg_margin, 1),
+                            'Grade': grade
+                        })
+                        
+                        successful_games += 1
+                        print(f"Successfully processed game {matchup} with total score {round(total_score, 1)}")
+                        
+                    except Exception as e:
+                        print(f"Error processing game {game_id if 'game_id' in locals() else 'unknown'}: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        continue
+                
+                # Create DataFrame from results
+                if not results:
+                    print("No games were successfully processed, creating dummy data.")
+                    results_df = create_dummy_data()
+                else:
+                    results_df = pd.DataFrame(results)
+                    
+                    # Sort by total score (descending)
+                    results_df = results_df.sort_values('Total Score', ascending=False).reset_index(drop=True)
+                    print(f"Successfully processed {successful_games} out of {games_to_process} games.")
+            
+            # Save the processed data to cache
+            if save_data_to_cache(results_df):
+                cached_results_df = results_df
+                print("Data successfully saved to cache.")
+            else:
+                print("Warning: Failed to save data to cache")
+        else:
+            print("Using cached data...")
+            # Use cached data
+            results_df = load_data_from_cache()
+            if results_df is None or len(results_df) <= 3:
+                # If loading fails or only contains dummy data, force a refresh
+                print("Cached data is empty or contains only dummy data, forcing refresh.")
+                # Clear cache and try again
+                clear_cache()
+                return process_data()
+            cached_results_df = results_df
+        
+        return results_df
     except Exception as e:
-        print(f"Error calculating margin/star performance for game_id {game_id}: {e}")
-        average_margin, margin_score, max_points, star_performance_score = 0, 0, 0, 0
+        print(f"Unexpected error in process_data: {e}")
+        import traceback
+        traceback.print_exc()
+        # Return dummy data as a fallback
+        return create_dummy_data()
 
-    total_scores['Margin'] = margin_score
-    total_scores['Star Performance'] = star_performance_score
-
-    # Calculate total score and grade
-    total_score = round(sum(total_scores.values()), 1)
-    grade = get_grade(total_score)
-
-    # Add game results to results list
-    results.append({
-        'Game Date': game_date,
-        'Teams': matchup,
-        'Total Score': total_score,
-        'Grade': grade,
-        'Period Scores': period_scores_total,
-        'Extra Periods': total_scores['Extra Periods'],
-        'Lead Changes': total_scores['Lead Changes'],
-        'Buzzer Beater': total_scores['Buzzer Beater'],
-        'FG3_PCT': total_scores['FG3_PCT'],
-        'Star Performance': total_scores['Star Performance'],
-        'Margin': total_scores['Margin'],
-        'Average Margin': average_margin
+# Function to create dummy data
+def create_dummy_data():
+    print("Creating dummy data for testing.")
+    return pd.DataFrame({
+        'Game Date': ['2023-01-01', '2023-01-02', '2023-01-03'],
+        'Teams': ['No Data', 'No Data', 'No Data'],
+        'Total Score': [0, 0, 0],
+        'Period Scores': [0, 0, 0],
+        'Extra Periods': [0, 0, 0],
+        'Lead Changes': [0, 0, 0],
+        'Buzzer Beater': [0, 0, 0],
+        'FG3_PCT': [0, 0, 0],
+        'Star Performance': [0, 0, 0],
+        'Margin': [0, 0, 0],
+        'Average Margin': [0, 0, 0],
+        'Grade': ['N/A', 'N/A', 'N/A']
     })
 
-# If no results were calculated, create a dummy row so DataFrame isn't empty
-if not results:
-    print("No analyzed results found, creating dummy data.")
-    results = [{
-       'Game Date': None,
-       'Teams': 'No Data',
-       'Total Score': 0,
-       'Grade': 'N/A',
-       'Period Scores': 0,
-       'Extra Periods': 0,
-       'Lead Changes': 0,
-       'Buzzer Beater': 0,
-       'FG3_PCT': 0,
-       'Star Performance': 0,
-       'Margin': 0,
-       'Average Margin': 0
-    }]
+# Process the data
+results_df = process_data()
 
-# Create DataFrame from results
-results_df = pd.DataFrame(results)
-print(results_df)
-
-# Round numeric columns to 1 decimal place
+# Define numeric columns for formatting
 numeric_columns = ['Total Score', 'Period Scores', 'Extra Periods', 'Lead Changes', 
                   'Buzzer Beater', 'FG3_PCT', 'Star Performance', 'Margin', 'Average Margin']
-for col in numeric_columns:
-    if col in results_df.columns:
-        results_df[col] = results_df[col].round(1)
 
 # -----------------------------
 # Define a modern color scheme
@@ -447,6 +704,8 @@ grade_colors = {
 
 # Define grade order for consistent display
 grade_order = ['A+', 'A', 'B+', 'B', 'C+', 'C', 'D', 'N/A']
+# Reversed order for bar chart stacking (so A+ appears at the top)
+grade_order_reversed = grade_order[::-1]
 
 # Define font styles
 fonts = {
@@ -473,12 +732,17 @@ fig_total_score = px.bar(
     title='Total Score per Game',
     labels={'Game Date': 'Game Date', 'Total Score': 'Total Score'},
     color_discrete_map=grade_colors,
-    category_orders={'Grade': grade_order}
+    category_orders={'Grade': grade_order_reversed},
+    # Stack bars so A+ appears at the top
+    barmode='stack'
 )
 
-# Reverse the order of the bars so A+ appears at the top
+# Set the legend order to match the original grade order (A+ at top)
 fig_total_score.update_layout(
-    legend_traceorder='reversed'
+    legend=dict(
+        traceorder='reversed',
+        itemsizing='constant'
+    )
 )
 
 # Scatter plot for relationship between average margin and total score
@@ -490,7 +754,7 @@ fig_margin = px.scatter(
     title='Relationship Between Average Margin and Total Score',
     labels={'Average Margin': 'Average Margin', 'Total Score': 'Total Score'},
     color_discrete_map=grade_colors,
-    category_orders={'Grade': grade_order}
+    category_orders={'Grade': grade_order}  # Use original order for scatter plot
 )
 
 # Bar chart for breakdown of score components per game
@@ -769,12 +1033,17 @@ def update_graphs(selected_game):
         title='Total Score per Game',
         labels={'Game Date': 'Game Date', 'Total Score': 'Total Score'},
         color_discrete_map=grade_colors,
-        category_orders={'Grade': grade_order}
+        category_orders={'Grade': grade_order_reversed},
+        # Stack bars so A+ appears at the top
+        barmode='stack'
     )
     
-    # Reverse the order of the bars so A+ appears at the top
+    # Set the legend order to match the original grade order (A+ at top)
     updated_fig_total_score.update_layout(
-        legend_traceorder='reversed'
+        legend=dict(
+            traceorder='reversed',
+            itemsizing='constant'
+        )
     )
     
     # Update Margin vs Total Score scatter plot
@@ -786,7 +1055,7 @@ def update_graphs(selected_game):
         title='Relationship Between Average Margin and Total Score',
         labels={'Average Margin': 'Average Margin', 'Total Score': 'Total Score'},
         color_discrete_map=grade_colors,
-        category_orders={'Grade': grade_order}
+        category_orders={'Grade': grade_order}  # Use original order for scatter plot
     )
     
     # Update Score Components breakdown chart
