@@ -99,28 +99,59 @@ def create_radar_chart(results_df):
     Returns:
         Plotly figure object
     """
-    # Calculate average scores for each component
-    avg_scores = results_df[METRICS].mean().reset_index()
-    avg_scores.columns = ['Component', 'Average Score']
-    
     # Create radar chart for average component scores
     fig = go.Figure()
     
-    # Add a single trace for the average scores
-    fig.add_trace(go.Scatterpolar(
-        r=avg_scores['Average Score'],
-        theta=METRICS,
-        fill='toself',
-        name='Average Score',
-        line_color=COLORS['primary']
-    ))
+    # Check if we're displaying a single game or multiple games
+    if len(results_df) == 1:
+        # Single game - show actual values
+        game_data = results_df[METRICS].iloc[0]
+        game_teams = results_df['Teams'].iloc[0]
+        
+        # Apply logarithmic scaling log10(x+1) for radar chart values
+        log_values = np.log10(game_data + 1)
+        
+        # Add trace for the single game
+        fig.add_trace(go.Scatterpolar(
+            r=log_values,
+            theta=METRICS,
+            fill='toself',
+            name=game_teams,
+            line_color=COLORS['primary'],
+            hovertemplate='%{theta}: %{customdata:.1f}<extra></extra>',
+            customdata=game_data.values  # Original values for hover display
+        ))
+        
+        max_log_value = max(log_values) * 1.1
+        title_text = f'Score Components for {game_teams} (Logarithmic Scale)'
+    else:
+        # Multiple games - show average values
+        avg_scores = results_df[METRICS].mean().reset_index()
+        avg_scores.columns = ['Component', 'Average Score']
+        
+        # Apply logarithmic scaling log10(x+1) for radar chart values
+        log_scores = np.log10(avg_scores['Average Score'] + 1)
+        
+        # Add a trace for the average scores
+        fig.add_trace(go.Scatterpolar(
+            r=log_scores,
+            theta=METRICS,
+            fill='toself',
+            name='Average Score',
+            line_color=COLORS['primary'],
+            hovertemplate='%{theta}: %{customdata:.1f}<extra></extra>',
+            customdata=avg_scores['Average Score']  # Original values for hover display
+        ))
+        
+        max_log_value = max(log_scores) * 1.1
+        title_text = 'Average Score by Component (Logarithmic Scale)'
     
     # Update layout
     fig.update_layout(
         polar=dict(
             radialaxis=dict(
                 visible=True,
-                range=[0, max(avg_scores['Average Score']) * 1.1],  # Set range with some padding
+                range=[0, max_log_value],  # Set range with some padding
                 tickfont=dict(color=COLORS['text'], family=FONTS['main']),
                 gridcolor=COLORS['grid']
             ),
@@ -133,7 +164,7 @@ def create_radar_chart(results_df):
         paper_bgcolor=COLORS['background'],
         plot_bgcolor=COLORS['background'],
         font_color=COLORS['text'],
-        title_text='Average Score by Component',
+        title_text=title_text,
         title_font_color=COLORS['text'],
         title_font_family=FONTS['main'],
         legend_font_color=COLORS['text'],
@@ -154,6 +185,7 @@ def create_correlation_matrix(results_df):
     Returns:
         Plotly figure object
     """
+    # Use original values for correlation matrix, not logarithmic values
     corr_columns = ['Total Score'] + METRICS + ['Average Margin']
     correlation_matrix = results_df[corr_columns].corr()
     
