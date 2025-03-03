@@ -71,8 +71,13 @@ def create_margin_scatter_plot(results_df):
         title='Relationship Between Average Margin and Total Score',
         labels={'Average Margin': 'Average Margin', 'Total Score': 'Total Score'},
         color_discrete_map=GRADE_COLORS,
-        category_orders={'Grade': GRADE_ORDER}  # Use original order for scatter plot
+        category_orders={'Grade': GRADE_ORDER},  # Use original order for scatter plot
+        size_max=15  # Increase base size for all markers
     )
+    
+    # Increase marker size by 30%
+    for trace in fig.data:
+        trace.marker.size = 13  # Default size is around 10, so 13 is ~30% larger
     
     fig.update_layout(
         paper_bgcolor=COLORS['background'],

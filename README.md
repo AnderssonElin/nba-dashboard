@@ -10,6 +10,8 @@ An interactive dashboard for analyzing and visualizing NBA games based on variou
 - [Project Structure](#project-structure)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Visualization Features](#visualization-features)
+- [Jupyter Notebook Analysis](#jupyter-notebook-analysis)
 - [Technologies](#technologies)
 - [API Usage](#api-usage)
 - [Customizable Parameters](#customizable-parameters)
@@ -37,8 +39,8 @@ The project is organized in a modular structure to improve readability and maint
 ```
 nba-game-analysis/
 │
-├── notebooks/                  # Jupyter notebooks for demonstration and analysis
-│   └── NBA_Game_Analysis.ipynb # Main notebook for demonstrating functionality
+├── notebooks/                  # Jupyter notebooks for analysis
+│   ├── NBA_Game_Analysis.ipynb # Interactive analysis notebook
 │
 ├── src/                        # Source code
 │   ├── data/                   # Data fetching and processing
@@ -53,7 +55,7 @@ nba-game-analysis/
 │   │
 │   ├── visualization/          # Visualization functions
 │   │   ├── __init__.py
-│   │   └── visualizations.py   # Functions for creating graphs
+│   │   └── visualizations.py   # Enhanced visualization functions
 │   │
 │   ├── __init__.py
 │   └── dashboard.py            # Main file for the Dash application
@@ -89,11 +91,50 @@ The dashboard will be available at http://127.0.0.1:8050/ in your browser.
 
 ### Using Jupyter Notebooks
 
-To explore data and visualizations in a Jupyter Notebook:
+For quick data analysis without starting the server:
 
-```
+```bash
 jupyter notebook notebooks/NBA_Game_Analysis.ipynb
 ```
+
+The notebook provides an interactive environment for:
+- Analyzing game data
+- Creating custom visualizations
+- Filtering and exploring results
+- Exporting data for further analysis
+
+## Visualization Features
+
+The project includes several enhanced visualization features:
+
+### 1. Radar Chart with Logarithmic Scale
+- Improved visibility of score components using log10(x+1) scaling
+- Original values displayed in hover tooltips
+- Separate views for individual games and averages
+
+### 2. Enhanced Scatter Plot
+- Increased marker sizes for better visibility
+- Interactive tooltips with detailed game information
+- Color coding by game grade
+
+### 3. Interactive Data Table
+- Color-coded grades
+- Sortable columns
+- Formatted numeric values
+- Easy data export functionality
+
+## Jupyter Notebook Analysis
+
+The project includes two ways to analyze data using Jupyter Notebooks:
+
+### Interactive Analysis (NBA_Game_Analysis.ipynb)
+- Full access to all visualization functions
+- Custom analysis capabilities
+- Example analyses and visualizations 
+- Step-by-step tutorials
+- Pre-configured visualizations
+- Easy filtering and sorting
+- Data export functionality
 
 ## Technologies
 
