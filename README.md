@@ -6,21 +6,42 @@ An interactive dashboard for analyzing and visualizing NBA games based on variou
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Project Structure](#project-structure)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Visualization Features](#visualization-features)
-- [Jupyter Notebook Analysis](#jupyter-notebook-analysis)
-- [Technologies](#technologies)
-- [API Usage](#api-usage)
-- [Customizable Parameters](#customizable-parameters)
-- [Development](#development)
-- [License](#license)
+- [1. Overview](#1-overview)
+  - [Core Purpose](#core-purpose)
+  - [Scoring Components](#scoring-components)
+  - [Data Flow](#data-flow)
+- [2. Getting Started](#2-getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+  - [Project Structure](#project-structure)
+- [3. Usage](#3-usage)
+  - [Dashboard Interface](#dashboard-interface)
+  - [Jupyter Notebook Analysis](#jupyter-notebook-analysis)
+- [4. Features](#4-features)
+  - [Visualization Components](#visualization-components)
+  - [Analysis Tools](#analysis-tools)
+  - [Data Export](#data-export)
+- [5. Configuration](#5-configuration)
+  - [Scoring Weights](#scoring-weights)
+  - [Visual Parameters](#visual-parameters)
+  - [Grade Settings](#grade-settings)
+- [6. Technical Details](#6-technical-details)
+  - [Technologies Used](#technologies-used)
+  - [API Integration](#api-integration)
+  - [Data Processing](#data-processing)
+- [7. Development](#7-development)
+  - [Contributing](#contributing)
+  - [Adding Features](#adding-features)
+  - [Testing](#testing)
+- [8. License](#8-license)
 
-## Overview
+## 1. Overview
 
-The NBA Game Analysis Dashboard is a tool for evaluating the quality of NBA games based on several factors:
+### Core Purpose
+The NBA Game Analysis Dashboard is a tool for evaluating and visualizing the quality and excitement level of NBA games. It provides both real-time analysis through an interactive dashboard and detailed exploration capabilities through Jupyter notebooks.
+
+### Scoring Components
+Each game is evaluated based on several key factors:
 
 - **Period Scores**: How close each period was (closer scores yield higher points)
 - **Extra Periods**: Presence of overtime (more overtime periods yield higher points)
@@ -32,8 +53,36 @@ The NBA Game Analysis Dashboard is a tool for evaluating the quality of NBA game
 
 Based on these factors, each game receives a total score and a grade (A+, A, B+, B, C+, C, D).
 
-## Project Structure
+### Data Flow
+```mermaid
+graph TD
+    A[NBA API] --> B[Data Fetcher]
+    B --> C[Game Analyzer]
+    C --> D[Score Calculator]
+    D --> E[Visualization Layer]
+    E --> F[Dashboard/Notebooks]
+```
 
+## 2. Getting Started
+
+### Prerequisites
+- Python 3.8 or higher
+- pip package manager
+- Git (for cloning the repository)
+
+### Installation
+1. Clone this repository:
+   ```bash
+   git clone https://github.com/yourusername/nba-game-analysis.git
+   cd nba-game-analysis
+   ```
+
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+### Project Structure
 The project is organized in a modular structure to improve readability and maintainability:
 
 ```
@@ -64,180 +113,146 @@ nba-game-analysis/
 └── README.md                   # Project documentation
 ```
 
-## Installation
+## 3. Usage
 
-1. Clone this repository:
-   ```
-   git clone https://github.com/yourusername/nba-game-analysis.git
-   cd nba-game-analysis
-   ```
-
-2. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-
-## Usage
-
-### Starting the Dashboard
-
-To start the interactive dashboard, run:
-
+### Dashboard Interface
+Start the interactive dashboard:
 ```python
 python -m src.dashboard
 ```
 
 The dashboard will be available at http://127.0.0.1:8050/ in your browser.
 
-### Using Jupyter Notebooks
-
-For quick data analysis without starting the server:
-
+### Jupyter Notebook Analysis
+For detailed analysis without starting the server:
 ```bash
 jupyter notebook notebooks/NBA_Game_Analysis.ipynb
 ```
 
-The notebook provides an interactive environment for:
-- Analyzing game data
-- Creating custom visualizations
-- Filtering and exploring results
-- Exporting data for further analysis
+The notebook provides:
+- Interactive data analysis
+- Custom visualizations
+- Filtering capabilities
+- Data export options
 
-## Visualization Features
+## 4. Features
 
-The project includes several enhanced visualization features:
+### Visualization Components
+#### 1. Radar Chart with Logarithmic Scale
+- Improved visibility using log10(x+1) scaling
+- Original values in hover tooltips
+- Individual and average game views
 
-### 1. Radar Chart with Logarithmic Scale
-- Improved visibility of score components using log10(x+1) scaling
-- Original values displayed in hover tooltips
-- Separate views for individual games and averages
+#### 2. Enhanced Scatter Plot
+- Larger markers for better visibility
+- Detailed game information in tooltips
+- Grade-based color coding
 
-### 2. Enhanced Scatter Plot
-- Increased marker sizes for better visibility
-- Interactive tooltips with detailed game information
-- Color coding by game grade
-
-### 3. Interactive Data Table
+#### 3. Interactive Data Table
 - Color-coded grades
 - Sortable columns
-- Formatted numeric values
-- Easy data export functionality
+- Formatted values
+- Export functionality
 
-## Jupyter Notebook Analysis
+### Analysis Tools
+- Custom filtering options
+- Comparative analysis
+- Statistical summaries
+- Trend analysis
 
-The project includes two ways to analyze data using Jupyter Notebooks:
+### Data Export
+- CSV export
+- JSON format
+- Visualization saving
+- Report generation
 
-### Interactive Analysis (NBA_Game_Analysis.ipynb)
-- Full access to all visualization functions
-- Custom analysis capabilities
-- Example analyses and visualizations 
-- Step-by-step tutorials
-- Pre-configured visualizations
-- Easy filtering and sorting
-- Data export functionality
+## 5. Configuration
 
-## Technologies
-
-The project uses the following technologies:
-
-- **Python**: Main programming language
-- **NBA API**: For fetching game data from the NBA
-- **Pandas**: For data manipulation and analysis
-- **Plotly**: For interactive visualizations
-- **Dash**: For creating the interactive web application
-- **Jupyter Notebook**: For interactive data analysis and demonstration
-
-## API Usage
-
-The project uses the NBA API to fetch game data. Specifically, the following endpoints are used:
-
-- `leaguegamefinder`: For fetching basic information about games
-- `playbyplay`: For fetching detailed play-by-play data for each game
-- `boxscoretraditionalv2`: For fetching player statistics for each game
-
-Data is fetched using the functions in `src/data/data_fetcher.py`. To avoid overloading the API, a short delay is inserted between calls.
-
-## Customizable Parameters
-
-You can customize various aspects of the dashboard by changing the parameters in `src/utils/config.py`:
-
-### Weight Parameters
-
+### Scoring Weights
+Customize scoring in `src/utils/config.py`:
 ```python
 WEIGHT_CONFIG = {
-    'period_weights': {1: 0.33, 2: 0.33, 3: 0.34, 4: 0},  # Weights for each period
-    'extra_period_weight': 0.05,      # Weight for overtime periods
-    'lead_change_weight': 0.05,       # Weight for lead changes
-    'buzzer_beater_weight': 0.0,      # Weight for buzzer-beaters
-    'fg3_pct_weight': 0.05,           # Weight for 3-point percentage
-    'star_performance_weight': 0.1,   # Weight for star performances
-    'margin_weight': 0.25,            # Weight for final margin
-    'max_total_score': 0.50           # Maximum score for periods
+    'period_weights': {1: 0.33, 2: 0.33, 3: 0.34, 4: 0},
+    'extra_period_weight': 0.05,
+    'lead_change_weight': 0.05,
+    'buzzer_beater_weight': 0.0,
+    'fg3_pct_weight': 0.05,
+    'star_performance_weight': 0.1,
+    'margin_weight': 0.25,
+    'max_total_score': 0.50
 }
 ```
 
-### Color Scheme
-
+### Visual Parameters
+Customize colors and styles:
 ```python
 COLORS = {
-    'background': '#121212',  # Darker black for background
-    'card': '#1E1E1E',        # Slightly lighter black for cards/panels
-    'text': '#FFFFFF',        # White text
-    'primary': '#BB86FC',     # Purple as primary color
-    'secondary': '#03DAC6',   # Teal as secondary color
-    'accent': '#CF6679',      # Pink/red as accent color
-    'grid': '#333333'         # Dark gray for grid lines
+    'background': '#121212',
+    'card': '#1E1E1E',
+    'text': '#FFFFFF',
+    'primary': '#BB86FC',
+    'secondary': '#03DAC6',
+    'accent': '#CF6679',
+    'grid': '#333333'
 }
 ```
 
-### Grade Colors
-
+### Grade Settings
+Configure grade colors and thresholds:
 ```python
 GRADE_COLORS = {
-    'A+': '#BB86FC',  # Primary color (purple)
-    'A': '#9D65F9',   # Lighter purple
-    'B+': '#03DAC6',  # Secondary color (teal)
-    'B': '#00B5A3',   # Darker teal
-    'C+': '#CF6679',  # Accent color (pink/red)
-    'C': '#B04759',   # Darker pink/red
-    'D': '#FF7597',   # Lighter pink
-    'N/A': '#666666'  # Gray for N/A
+    'A+': '#BB86FC',
+    'A': '#9D65F9',
+    'B+': '#03DAC6',
+    'B': '#00B5A3',
+    'C+': '#CF6679',
+    'C': '#B04759',
+    'D': '#FF7597'
 }
 ```
 
-### Fonts
+## 6. Technical Details
 
-```python
-FONTS = {
-    'main': '"Consolas", "Monaco", "Courier New", monospace',  # SQL-like monospace font
-    'size': {
-        'small': '12px',
-        'normal': '14px',
-        'large': '18px',
-        'title': '24px',
-        'header': '20px'
-    }
-}
-```
+### Technologies Used
+- **Python**: Core programming language
+- **NBA API**: Data source
+- **Pandas**: Data processing
+- **Plotly**: Interactive visualizations
+- **Dash**: Web dashboard
+- **Jupyter**: Analysis environment
 
-## Development
+### API Integration
+The project uses several NBA API endpoints:
+- `leaguegamefinder`: Basic game information
+- `playbyplay`: Detailed game events
+- `boxscoretraditionalv2`: Player statistics
 
-To contribute to the project:
+### Data Processing
+- Automated data fetching
+- Score calculation
+- Grade assignment
+- Visualization preparation
 
+## 7. Development
+
+### Contributing
 1. Fork the repository
-2. Create a new branch (`git checkout -b feature/amazing-feature`)
+2. Create a feature branch
 3. Make your changes
-4. Commit your changes (`git commit -m 'Add some amazing feature'`)
-5. Push to the branch (`git push origin feature/amazing-feature`)
-6. Open a Pull Request
+4. Submit a pull request
 
-## Data Flow
+### Adding Features
+- Add new metrics in game_analyzer.py
+- Update configuration in config.py
+- Create new visualizations in visualizations.py
+- Update documentation
 
-```mermaid
-graph TD
-    A[NBA API] --> B[Data Fetcher]
-    B --> C[Game Analyzer]
-    C --> D[Score Calculator]
-    D --> E[Visualization Layer]
-    E --> F[Dashboard/Notebooks]
-```
+### Testing
+- Run unit tests
+- Test new features
+- Verify visualizations
+- Check performance
+
+## 8. License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
