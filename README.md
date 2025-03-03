@@ -231,6 +231,13 @@ To contribute to the project:
 5. Push to the branch (`git push origin feature/amazing-feature`)
 6. Open a Pull Request
 
-## License
+## Data Flow
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+```mermaid
+graph TD
+    A[NBA API] --> B[Data Fetcher]
+    B --> C[Game Analyzer]
+    C --> D[Score Calculator]
+    D --> E[Visualization Layer]
+    E --> F[Dashboard/Notebooks]
+```
