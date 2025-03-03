@@ -252,7 +252,3 @@ The project uses several NBA API endpoints:
 - Test new features
 - Verify visualizations
 - Check performance
-
-## 8. License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
